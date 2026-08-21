@@ -347,8 +347,11 @@ func unpackTarball(tarball, outputDir string) error {
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// Determine the file's full path
-		targetPath := filepath.Join(outputDir, header.Name) // nolint:gosec
+		// Determine the file's full path and ensure the archive entry cannot escape outputDir.
+		targetPath, err := tarEntryTargetPath(outputDir, header.Name)
+		if err != nil {
+			return err
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -367,6 +370,23 @@ func unpackTarball(tarball, outputDir string) error {
 		}
 	}
 	return nil
+}
+
+func tarEntryTargetPath(outputDir, entryName string) (string, error) {
+	if filepath.IsAbs(entryName) {
+		return "", fmt.Errorf("invalid tar entry path %q: absolute paths are not allowed", entryName)
+	}
+
+	targetPath := filepath.Join(outputDir, filepath.Clean(entryName))
+	rel, err := filepath.Rel(outputDir, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve tar entry path %q: %w", entryName, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid tar entry path %q: path escapes extraction directory", entryName)
+	}
+
+	return targetPath, nil
 }
 
 // extractFile writes the content of a file from the tar archive.
