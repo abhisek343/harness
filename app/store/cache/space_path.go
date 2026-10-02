@@ -69,15 +69,17 @@ type spacePathCache struct {
 	spacePathTransformation store.SpacePathTransformation
 }
 
-func (c spacePathCache) Get(ctx context.Context, key string) (*types.SpacePath, error) {
-	// build unique key from provided value
+func (c spacePathCache) normalizeKey(key string) string {
 	segments := paths.Segments(key)
 	uniqueKey := ""
 	for i, segment := range segments {
 		uniqueKey = paths.Concatenate(uniqueKey, c.spacePathTransformation(segment, i == 0))
 	}
+	return uniqueKey
+}
 
-	return c.inner.Get(ctx, uniqueKey)
+func (c spacePathCache) Get(ctx context.Context, key string) (*types.SpacePath, error) {
+	return c.inner.Get(ctx, c.normalizeKey(key))
 }
 
 func (c spacePathCache) Stats() (int64, int64) {
@@ -85,5 +87,5 @@ func (c spacePathCache) Stats() (int64, int64) {
 }
 
 func (c spacePathCache) Evict(ctx context.Context, key string) {
-	c.inner.Evict(ctx, key)
+	c.inner.Evict(ctx, c.normalizeKey(key))
 }

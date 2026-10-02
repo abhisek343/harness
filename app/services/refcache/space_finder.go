@@ -16,11 +16,13 @@ package refcache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
 	"github.com/harness/gitness/app/store"
 	"github.com/harness/gitness/app/store/cache"
+	gitness_store "github.com/harness/gitness/store"
 	"github.com/harness/gitness/types"
 )
 
@@ -62,18 +64,40 @@ func (s SpaceFinder) FindByID(ctx context.Context, spaceID int64) (*types.SpaceC
 
 func (s SpaceFinder) FindByRef(ctx context.Context, spaceRef string) (*types.SpaceCore, error) {
 	spaceID, err := strconv.ParseInt(spaceRef, 10, 64)
-	if err != nil || spaceID <= 0 {
-		spacePath, err := s.spacePathCache.Get(ctx, spaceRef)
+	if err == nil && spaceID > 0 {
+		spaceCore, err := s.spaceIDCache.Get(ctx, spaceID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get space ID by space path from cache: %w", err)
+			return nil, fmt.Errorf("failed to get space by ID from cache: %w", err)
 		}
-
-		spaceID = spacePath.SpaceID
+		return spaceCore, nil
 	}
 
-	spaceCore, err := s.spaceIDCache.Get(ctx, spaceID)
+	spacePath, err := s.spacePathCache.Get(ctx, spaceRef)
 	if err != nil {
+		return nil, fmt.Errorf("failed to get space ID by space path from cache: %w", err)
+	}
+
+	spaceCore, err := s.spaceIDCache.Get(ctx, spacePath.SpaceID)
+	if err == nil {
+		return spaceCore, nil
+	}
+	if !errors.Is(err, gitness_store.ErrResourceNotFound) {
 		return nil, fmt.Errorf("failed to get space by ID from cache: %w", err)
+	}
+
+	// A delete/recreate can temporarily leave the path cache pointing at the deleted
+	// space ID while the ID cache has already observed the deletion. Drop the stale
+	// path entry and resolve it once more so a recreated space can be found immediately.
+	s.spacePathCache.Evict(ctx, spaceRef)
+
+	spacePath, err = s.spacePathCache.Get(ctx, spaceRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh space ID by space path from cache: %w", err)
+	}
+
+	spaceCore, err = s.spaceIDCache.Get(ctx, spacePath.SpaceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get space by refreshed ID from cache: %w", err)
 	}
 
 	return spaceCore, nil
